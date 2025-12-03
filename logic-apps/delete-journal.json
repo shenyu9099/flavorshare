@@ -1,0 +1,72 @@
+{
+  "definition": {
+    "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+    "contentVersion": "1.0.0.0",
+    "triggers": {
+      "When_a_HTTP_request_is_received": {
+        "type": "Request",
+        "kind": "Http",
+        "inputs": {
+          "method": "DELETE",
+          "schema": {}
+        }
+      }
+    },
+    "actions": {
+      "Delete_journal_document": {
+        "runAfter": {},
+        "type": "ApiConnection",
+        "inputs": {
+          "host": {
+            "connection": {
+              "name": "@parameters('$connections')['documentdb']['connectionId']"
+            }
+          },
+          "method": "delete",
+          "path": "/v2/cosmosdb/@{encodeURIComponent('flavorsharedb2')}/dbs/@{encodeURIComponent('FlavorShareDB')}/colls/@{encodeURIComponent('journals')}/docs/@{encodeURIComponent(triggerOutputs()?['queries']?['id'])}",
+          "headers": {
+            "x-ms-documentdb-partitionkey": "@{triggerOutputs()?['queries']?['userId']}"
+          }
+        }
+      },
+      "Response": {
+        "runAfter": {
+          "Delete_journal_document": ["Succeeded"]
+        },
+        "type": "Response",
+        "kind": "Http",
+        "inputs": {
+          "statusCode": 200,
+          "headers": {
+            "Content-Type": "application/json",
+            "Access-Control-Allow-Origin": "*"
+          },
+          "body": {
+            "success": true,
+            "message": "Journal deleted successfully"
+          }
+        }
+      }
+    },
+    "outputs": {},
+    "parameters": {
+      "$connections": {
+        "type": "Object",
+        "defaultValue": {}
+      }
+    }
+  },
+  "parameters": {
+    "$connections": {
+      "type": "Object",
+      "value": {
+        "documentdb": {
+          "id": "/subscriptions/4746f881-91c0-4654-b2e8-c3d96a6476b6/providers/Microsoft.Web/locations/uksouth/managedApis/documentdb",
+          "connectionId": "/subscriptions/4746f881-91c0-4654-b2e8-c3d96a6476b6/resourceGroups/FlavorShare-RG/providers/Microsoft.Web/connections/new_conn_dfe08",
+          "connectionName": "new_conn_dfe08"
+        }
+      }
+    }
+  }
+}
+

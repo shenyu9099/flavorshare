@@ -1,0 +1,125 @@
+{
+    "definition": {
+        "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+        "contentVersion": "1.0.0.0",
+        "triggers": {
+            "When_a_HTTP_request_is_received": {
+                "type": "Request",
+                "kind": "Http",
+                "inputs": {
+                    "method": "POST",
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "email": {
+                                "type": "string"
+                            },
+                            "password": {
+                                "type": "string"
+                            }
+                        },
+                        "required": ["email", "password"]
+                    }
+                }
+            }
+        },
+        "actions": {
+            "Query_user": {
+                "runAfter": {},
+                "type": "ApiConnection",
+                "inputs": {
+                    "host": {
+                        "connection": {
+                            "name": "@parameters('$connections')['sql']['connectionId']"
+                        }
+                    },
+                    "method": "get",
+                    "path": "/v2/datasets/@{encodeURIComponent(encodeURIComponent('default'))},@{encodeURIComponent(encodeURIComponent('default'))}/tables/@{encodeURIComponent(encodeURIComponent('[dbo].[Users]'))}/items",
+                    "queries": {
+                        "$filter": "Email eq '@{triggerBody()?['email']}' and PasswordHash eq '@{triggerBody()?['password']}'"
+                    }
+                }
+            },
+            "Condition_login": {
+                "actions": {
+                    "Response_success": {
+                        "runAfter": {},
+                        "type": "Response",
+                        "kind": "Http",
+                        "inputs": {
+                            "statusCode": 200,
+                            "headers": {
+                                "Content-Type": "application/json",
+                                "Access-Control-Allow-Origin": "*"
+                            },
+                            "body": {
+                                "success": true,
+                                "message": "Login successful",
+                                "user": {
+                                    "id": "@{body('Query_user')?['value']?[0]?['UserId']}",
+                                    "name": "@{body('Query_user')?['value']?[0]?['Name']}",
+                                    "email": "@{body('Query_user')?['value']?[0]?['Email']}"
+                                }
+                            }
+                        }
+                    }
+                },
+                "runAfter": {
+                    "Query_user": [
+                        "Succeeded"
+                    ]
+                },
+                "else": {
+                    "actions": {
+                        "Response_failed": {
+                            "runAfter": {},
+                            "type": "Response",
+                            "kind": "Http",
+                            "inputs": {
+                                "statusCode": 401,
+                                "headers": {
+                                    "Content-Type": "application/json",
+                                    "Access-Control-Allow-Origin": "*"
+                                },
+                                "body": {
+                                    "success": false,
+                                    "error": "Invalid email or password"
+                                }
+                            }
+                        }
+                    }
+                },
+                "expression": {
+                    "and": [
+                        {
+                            "greater": [
+                                "@length(body('Query_user')?['value'])",
+                                0
+                            ]
+                        }
+                    ]
+                },
+                "type": "If"
+            }
+        },
+        "outputs": {},
+        "parameters": {
+            "$connections": {
+                "type": "Object",
+                "defaultValue": {}
+            }
+        }
+    },
+    "parameters": {
+        "$connections": {
+            "type": "Object",
+            "value": {
+                "sql": {
+                    "id": "/subscriptions/4746f881-91c0-4654-b2e8-c3d96a6476b6/providers/Microsoft.Web/locations/uksouth/managedApis/sql",
+                    "connectionId": "/subscriptions/4746f881-91c0-4654-b2e8-c3d96a6476b6/resourceGroups/FlavorShare-RG/providers/Microsoft.Web/connections/sql",
+                    "connectionName": "sql"
+                }
+            }
+        }
+    }
+}

@@ -1,0 +1,358 @@
+{
+  "definition": {
+    "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+    "contentVersion": "1.0.0.0",
+    "triggers": {
+      "When_a_HTTP_request_is_received": {
+        "type": "Request",
+        "kind": "Http",
+        "inputs": {
+          "method": "POST",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "journalId": { "type": "string" },
+              "userId": { "type": "string" },
+              "fileName": { "type": "string" },
+              "fileContent": { "type": "string" },
+              "mediaType": { "type": "string" },
+              "contentType": { "type": "string" }
+            },
+            "required": ["journalId", "userId", "fileName", "fileContent", "mediaType"]
+          }
+        }
+      }
+    },
+    "actions": {
+      "Initialize_mediaId": {
+        "runAfter": {},
+        "type": "InitializeVariable",
+        "inputs": {
+          "variables": [
+            {
+              "name": "mediaId",
+              "type": "string",
+              "value": "@{concat('media-', guid())}"
+            }
+          ]
+        }
+      },
+      "Initialize_photos": {
+        "runAfter": {
+          "Initialize_mediaId": ["Succeeded"]
+        },
+        "type": "InitializeVariable",
+        "inputs": {
+          "variables": [
+            {
+              "name": "photos",
+              "type": "array",
+              "value": []
+            }
+          ]
+        }
+      },
+      "Initialize_videos": {
+        "runAfter": {
+          "Initialize_photos": ["Succeeded"]
+        },
+        "type": "InitializeVariable",
+        "inputs": {
+          "variables": [
+            {
+              "name": "videos",
+              "type": "array",
+              "value": []
+            }
+          ]
+        }
+      },
+      "Initialize_audio": {
+        "runAfter": {
+          "Initialize_videos": ["Succeeded"]
+        },
+        "type": "InitializeVariable",
+        "inputs": {
+          "variables": [
+            {
+              "name": "audio",
+              "type": "array",
+              "value": []
+            }
+          ]
+        }
+      },
+      "Upload_to_Blob": {
+        "runAfter": {
+          "Initialize_audio": ["Succeeded"]
+        },
+        "type": "ApiConnection",
+        "inputs": {
+          "host": {
+            "connection": {
+              "name": "@parameters('$connections')['azureblob']['connectionId']"
+            }
+          },
+          "method": "post",
+          "body": "@base64ToBinary(triggerBody()?['fileContent'])",
+          "headers": {
+            "ReadFileMetadataFromServer": true
+          },
+          "path": "/v2/datasets/@{encodeURIComponent(encodeURIComponent('flavorsharestorage123'))}/files",
+          "queries": {
+            "folderPath": "/media/@{triggerBody()?['mediaType']}",
+            "name": "@{concat(variables('mediaId'), '-', triggerBody()?['fileName'])}",
+            "queryParametersSingleEncoded": true
+          }
+        },
+        "runtimeConfiguration": {
+          "contentTransfer": {
+            "transferMode": "Chunked"
+          }
+        }
+      },
+      "Get_current_journal": {
+        "runAfter": {
+          "Upload_to_Blob": ["Succeeded"]
+        },
+        "type": "ApiConnection",
+        "inputs": {
+          "host": {
+            "connection": {
+              "name": "@parameters('$connections')['documentdb']['connectionId']"
+            }
+          },
+          "method": "get",
+          "headers": {
+            "x-ms-documentdb-partitionkey": "@{triggerBody()?['userId']}"
+          },
+          "path": "/v2/cosmosdb/@{encodeURIComponent('flavorsharedb')}/dbs/@{encodeURIComponent('FlavorShareDB')}/colls/@{encodeURIComponent('journals')}/docs/@{encodeURIComponent(triggerBody()?['journalId'])}"
+        }
+      },
+      "Check_media_is_object": {
+        "runAfter": {
+          "Get_current_journal": ["Succeeded"]
+        },
+        "type": "If",
+        "expression": {
+          "and": [
+            {
+              "not": {
+                "equals": ["@body('Get_current_journal')?['media']", null]
+              }
+            },
+            {
+              "equals": ["@string(body('Get_current_journal')?['media']?['photos'])", "@string(body('Get_current_journal')?['media']?['photos'])"]
+            }
+          ]
+        },
+        "actions": {
+          "Set_existing_photos": {
+            "runAfter": {},
+            "type": "SetVariable",
+            "inputs": {
+              "name": "photos",
+              "value": "@if(equals(body('Get_current_journal')?['media']?['photos'], null), json('[]'), body('Get_current_journal')?['media']?['photos'])"
+            }
+          },
+          "Set_existing_videos": {
+            "runAfter": {
+              "Set_existing_photos": ["Succeeded"]
+            },
+            "type": "SetVariable",
+            "inputs": {
+              "name": "videos",
+              "value": "@if(equals(body('Get_current_journal')?['media']?['videos'], null), json('[]'), body('Get_current_journal')?['media']?['videos'])"
+            }
+          },
+          "Set_existing_audio": {
+            "runAfter": {
+              "Set_existing_videos": ["Succeeded"]
+            },
+            "type": "SetVariable",
+            "inputs": {
+              "name": "audio",
+              "value": "@if(equals(body('Get_current_journal')?['media']?['audio'], null), json('[]'), body('Get_current_journal')?['media']?['audio'])"
+            }
+          }
+        },
+        "else": {
+          "actions": {}
+        }
+      },
+      "Add_photo_if_needed": {
+        "runAfter": {
+          "Check_media_is_object": ["Succeeded"]
+        },
+        "type": "If",
+        "expression": {
+          "and": [
+            {
+              "equals": ["@triggerBody()?['mediaType']", "photos"]
+            }
+          ]
+        },
+        "actions": {
+          "Append_photo": {
+            "runAfter": {},
+            "type": "AppendToArrayVariable",
+            "inputs": {
+              "name": "photos",
+              "value": {
+                "id": "@{variables('mediaId')}",
+                "url": "@{concat('https://flavorsharestorage123.blob.core.windows.net', body('Upload_to_Blob')?['Path'])}",
+                "title": "@{triggerBody()?['fileName']}"
+              }
+            }
+          }
+        },
+        "else": {
+          "actions": {}
+        }
+      },
+      "Add_video_if_needed": {
+        "runAfter": {
+          "Add_photo_if_needed": ["Succeeded"]
+        },
+        "type": "If",
+        "expression": {
+          "and": [
+            {
+              "equals": ["@triggerBody()?['mediaType']", "videos"]
+            }
+          ]
+        },
+        "actions": {
+          "Append_video": {
+            "runAfter": {},
+            "type": "AppendToArrayVariable",
+            "inputs": {
+              "name": "videos",
+              "value": {
+                "id": "@{variables('mediaId')}",
+                "url": "@{concat('https://flavorsharestorage123.blob.core.windows.net', body('Upload_to_Blob')?['Path'])}",
+                "title": "@{triggerBody()?['fileName']}"
+              }
+            }
+          }
+        },
+        "else": {
+          "actions": {}
+        }
+      },
+      "Add_audio_if_needed": {
+        "runAfter": {
+          "Add_video_if_needed": ["Succeeded"]
+        },
+        "type": "If",
+        "expression": {
+          "and": [
+            {
+              "equals": ["@triggerBody()?['mediaType']", "audio"]
+            }
+          ]
+        },
+        "actions": {
+          "Append_audio": {
+            "runAfter": {},
+            "type": "AppendToArrayVariable",
+            "inputs": {
+              "name": "audio",
+              "value": {
+                "id": "@{variables('mediaId')}",
+                "url": "@{concat('https://flavorsharestorage123.blob.core.windows.net', body('Upload_to_Blob')?['Path'])}",
+                "title": "@{triggerBody()?['fileName']}"
+              }
+            }
+          }
+        },
+        "else": {
+          "actions": {}
+        }
+      },
+      "Update_journal_with_media": {
+        "runAfter": {
+          "Add_audio_if_needed": ["Succeeded"]
+        },
+        "type": "ApiConnection",
+        "inputs": {
+          "host": {
+            "connection": {
+              "name": "@parameters('$connections')['documentdb']['connectionId']"
+            }
+          },
+          "method": "put",
+          "body": {
+            "id": "@{body('Get_current_journal')?['id']}",
+            "userId": "@{body('Get_current_journal')?['userId']}",
+            "title": "@{body('Get_current_journal')?['title']}",
+            "description": "@{body('Get_current_journal')?['description']}",
+            "coverImage": "@{body('Get_current_journal')?['coverImage']}",
+            "recipe": "@{body('Get_current_journal')?['recipe']}",
+            "media": {
+              "photos": "@variables('photos')",
+              "videos": "@variables('videos')",
+              "audio": "@variables('audio')"
+            },
+            "createdAt": "@{body('Get_current_journal')?['createdAt']}",
+            "updatedAt": "@{utcNow()}"
+          },
+          "headers": {
+            "x-ms-documentdb-partitionkey": "@{triggerBody()?['userId']}"
+          },
+          "path": "/v2/cosmosdb/@{encodeURIComponent('flavorsharedb')}/dbs/@{encodeURIComponent('FlavorShareDB')}/colls/@{encodeURIComponent('journals')}/docs/@{encodeURIComponent(triggerBody()?['journalId'])}"
+        }
+      },
+      "Response": {
+        "runAfter": {
+          "Update_journal_with_media": ["Succeeded"]
+        },
+        "type": "Response",
+        "kind": "Http",
+        "inputs": {
+          "statusCode": 201,
+          "headers": {
+            "Content-Type": "application/json",
+            "Access-Control-Allow-Origin": "*"
+          },
+          "body": {
+            "success": true,
+            "message": "Media uploaded successfully",
+            "media": {
+              "id": "@{variables('mediaId')}",
+              "url": "@{concat('https://flavorsharestorage123.blob.core.windows.net', body('Upload_to_Blob')?['Path'])}",
+              "type": "@{triggerBody()?['mediaType']}",
+              "fileName": "@{triggerBody()?['fileName']}"
+            }
+          }
+        }
+      }
+    },
+    "outputs": {},
+    "parameters": {
+      "$connections": {
+        "type": "Object",
+        "defaultValue": {}
+      }
+    }
+  },
+  "parameters": {
+    "$connections": {
+      "type": "Object",
+      "value": {
+        "azureblob": {
+          "id": "/subscriptions/4746f881-91c0-4654-b2e8-c3d96a6476b6/providers/Microsoft.Web/locations/uksouth/managedApis/azureblob",
+          "connectionId": "/subscriptions/4746f881-91c0-4654-b2e8-c3d96a6476b6/resourceGroups/FlavorShare-RG/providers/Microsoft.Web/connections/azureblob",
+          "connectionName": "azureblob",
+          "connectionProperties": {}
+        },
+        "documentdb": {
+          "id": "/subscriptions/4746f881-91c0-4654-b2e8-c3d96a6476b6/providers/Microsoft.Web/locations/uksouth/managedApis/documentdb",
+          "connectionId": "/subscriptions/4746f881-91c0-4654-b2e8-c3d96a6476b6/resourceGroups/FlavorShare-RG/providers/Microsoft.Web/connections/documentdb-3",
+          "connectionName": "documentdb-3",
+          "connectionProperties": {}
+        }
+      }
+    }
+  }
+}

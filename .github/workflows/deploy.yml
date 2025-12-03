@@ -1,0 +1,49 @@
+name: Deploy to Azure Static Website
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:  # 允许手动触发
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+      # 检出代码
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # 设置 Node.js
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      # 安装依赖
+      - name: Install dependencies
+        run: npm ci --legacy-peer-deps
+
+      # 构建项目
+      - name: Build project
+        run: npm run build
+
+      # 登录 Azure
+      - name: Login to Azure
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      # 部署到 Azure Blob Storage 静态网站
+      - name: Deploy to Azure Static Website
+        uses: azure/CLI@v1
+        with:
+          inlineScript: |
+            az storage blob upload-batch \
+              --account-name flavorsharestorage123 \
+              --destination '$web' \
+              --source ./dist \
+              --overwrite
+

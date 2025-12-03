@@ -1,0 +1,168 @@
+{
+    "definition": {
+        "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+        "contentVersion": "1.0.0.0",
+        "triggers": {
+            "When_a_HTTP_request_is_received": {
+                "type": "Request",
+                "kind": "Http",
+                "inputs": {
+                    "method": "POST",
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "name": {
+                                "type": "string"
+                            },
+                            "email": {
+                                "type": "string"
+                            },
+                            "password": {
+                                "type": "string"
+                            }
+                        },
+                        "required": ["name", "email", "password"]
+                    }
+                }
+            }
+        },
+        "actions": {
+            "Initialize_userId": {
+                "runAfter": {},
+                "type": "InitializeVariable",
+                "inputs": {
+                    "variables": [
+                        {
+                            "name": "userId",
+                            "type": "string",
+                            "value": "user-@{utcNow('yyyyMMddHHmmssfff')}"
+                        }
+                    ]
+                }
+            },
+            "Check_if_email_exists": {
+                "runAfter": {
+                    "Initialize_userId": [
+                        "Succeeded"
+                    ]
+                },
+                "type": "ApiConnection",
+                "inputs": {
+                    "host": {
+                        "connection": {
+                            "name": "@parameters('$connections')['sql']['connectionId']"
+                        }
+                    },
+                    "method": "get",
+                    "path": "/v2/datasets/@{encodeURIComponent(encodeURIComponent('default'))},@{encodeURIComponent(encodeURIComponent('default'))}/tables/@{encodeURIComponent(encodeURIComponent('[dbo].[Users]'))}/items",
+                    "queries": {
+                        "$filter": "Email eq '@{triggerBody()?['email']}'"
+                    }
+                }
+            },
+            "Condition_check_exists": {
+                "actions": {
+                    "Response_email_exists": {
+                        "runAfter": {},
+                        "type": "Response",
+                        "kind": "Http",
+                        "inputs": {
+                            "statusCode": 400,
+                            "headers": {
+                                "Content-Type": "application/json",
+                                "Access-Control-Allow-Origin": "*"
+                            },
+                            "body": {
+                                "success": false,
+                                "error": "Email already exists"
+                            }
+                        }
+                    }
+                },
+                "runAfter": {
+                    "Check_if_email_exists": [
+                        "Succeeded"
+                    ]
+                },
+                "else": {
+                    "actions": {
+                        "Insert_new_user": {
+                            "runAfter": {},
+                            "type": "ApiConnection",
+                            "inputs": {
+                                "host": {
+                                    "connection": {
+                                        "name": "@parameters('$connections')['sql']['connectionId']"
+                                    }
+                                },
+                                "method": "post",
+                                "body": {
+                                    "UserId": "@{variables('userId')}",
+                                    "Email": "@{triggerBody()?['email']}",
+                                    "Name": "@{triggerBody()?['name']}",
+                                    "PasswordHash": "@{triggerBody()?['password']}"
+                                },
+                                "path": "/v2/datasets/@{encodeURIComponent(encodeURIComponent('default'))},@{encodeURIComponent(encodeURIComponent('default'))}/tables/@{encodeURIComponent(encodeURIComponent('[dbo].[Users]'))}/items"
+                            }
+                        },
+                        "Response_success": {
+                            "runAfter": {
+                                "Insert_new_user": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "Response",
+                            "kind": "Http",
+                            "inputs": {
+                                "statusCode": 201,
+                                "headers": {
+                                    "Content-Type": "application/json",
+                                    "Access-Control-Allow-Origin": "*"
+                                },
+                                "body": {
+                                    "success": true,
+                                    "message": "User registered successfully",
+                                    "user": {
+                                        "id": "@{variables('userId')}",
+                                        "name": "@{triggerBody()?['name']}",
+                                        "email": "@{triggerBody()?['email']}"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "expression": {
+                    "and": [
+                        {
+                            "greater": [
+                                "@length(body('Check_if_email_exists')?['value'])",
+                                0
+                            ]
+                        }
+                    ]
+                },
+                "type": "If"
+            }
+        },
+        "outputs": {},
+        "parameters": {
+            "$connections": {
+                "type": "Object",
+                "defaultValue": {}
+            }
+        }
+    },
+    "parameters": {
+        "$connections": {
+            "type": "Object",
+            "value": {
+                "sql": {
+                    "id": "/subscriptions/4746f881-91c0-4654-b2e8-c3d96a6476b6/providers/Microsoft.Web/locations/uksouth/managedApis/sql",
+                    "connectionId": "/subscriptions/4746f881-91c0-4654-b2e8-c3d96a6476b6/resourceGroups/FlavorShare-RG/providers/Microsoft.Web/connections/sql",
+                    "connectionName": "sql"
+                }
+            }
+        }
+    }
+}

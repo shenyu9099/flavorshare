@@ -1,0 +1,283 @@
+{
+  "definition": {
+    "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+    "contentVersion": "1.0.0.0",
+    "triggers": {
+      "When_a_HTTP_request_is_received": {
+        "type": "Request",
+        "kind": "Http",
+        "inputs": {
+          "method": "POST",
+          "schema": {
+            "type": "object",
+            "properties": {
+              "userId": { "type": "string" },
+              "title": { "type": "string" },
+              "description": { "type": "string" },
+              "coverImage": { "type": "string" },
+              "coverImageData": { "type": "string" },
+              "coverImageName": { "type": "string" },
+              "recipe": { "type": "object" },
+              "newMedia": {
+                "type": "object",
+                "properties": {
+                  "photos": { "type": "array" },
+                  "videos": { "type": "array" },
+                  "audio": { "type": "array" }
+                }
+              }
+            },
+            "required": ["userId", "title"]
+          }
+        }
+      }
+    },
+    "actions": {
+      "Initialize_journalId": {
+        "runAfter": {},
+        "type": "InitializeVariable",
+        "inputs": {
+          "variables": [{ "name": "journalId", "type": "string", "value": "@{concat('journal-', guid())}" }]
+        }
+      },
+      "Initialize_coverImageUrl": {
+        "runAfter": { "Initialize_journalId": ["Succeeded"] },
+        "type": "InitializeVariable",
+        "inputs": {
+          "variables": [{ "name": "coverImageUrl", "type": "string", "value": "@{coalesce(triggerBody()?['coverImage'], '')}" }]
+        }
+      },
+      "Initialize_photos": {
+        "runAfter": { "Initialize_coverImageUrl": ["Succeeded"] },
+        "type": "InitializeVariable",
+        "inputs": {
+          "variables": [{ "name": "photos", "type": "array", "value": [] }]
+        }
+      },
+      "Initialize_videos": {
+        "runAfter": { "Initialize_photos": ["Succeeded"] },
+        "type": "InitializeVariable",
+        "inputs": {
+          "variables": [{ "name": "videos", "type": "array", "value": [] }]
+        }
+      },
+      "Initialize_audio": {
+        "runAfter": { "Initialize_videos": ["Succeeded"] },
+        "type": "InitializeVariable",
+        "inputs": {
+          "variables": [{ "name": "audio", "type": "array", "value": [] }]
+        }
+      },
+      "Upload_cover_if_exists": {
+        "runAfter": { "Initialize_audio": ["Succeeded"] },
+        "type": "If",
+        "expression": {
+          "and": [
+            { "not": { "equals": ["@triggerBody()?['coverImageData']", null] } },
+            { "not": { "equals": ["@triggerBody()?['coverImageData']", ""] } }
+          ]
+        },
+        "actions": {
+          "Upload_cover_to_Blob": {
+            "type": "ApiConnection",
+            "inputs": {
+              "host": { "connection": { "name": "@parameters('$connections')['azureblob']['connectionId']" } },
+              "method": "post",
+              "body": "@base64ToBinary(triggerBody()?['coverImageData'])",
+              "headers": { "ReadFileMetadataFromServer": true },
+              "path": "/v2/datasets/@{encodeURIComponent(encodeURIComponent('flavorsharestorage123'))}/files",
+              "queries": {
+                "folderPath": "/media/covers",
+                "name": "@{concat(variables('journalId'), '-', coalesce(triggerBody()?['coverImageName'], 'cover.jpg'))}",
+                "queryParametersSingleEncoded": true
+              }
+            },
+            "runtimeConfiguration": { "contentTransfer": { "transferMode": "Chunked" } }
+          },
+          "Set_coverImageUrl": {
+            "runAfter": { "Upload_cover_to_Blob": ["Succeeded"] },
+            "type": "SetVariable",
+            "inputs": {
+              "name": "coverImageUrl",
+              "value": "@{concat('https://flavorsharestorage123.blob.core.windows.net', body('Upload_cover_to_Blob')?['Path'])}"
+            }
+          }
+        }
+      },
+      "Process_new_photos": {
+        "runAfter": { "Upload_cover_if_exists": ["Succeeded"] },
+        "type": "Foreach",
+        "foreach": "@coalesce(triggerBody()?['newMedia']?['photos'], json('[]'))",
+        "actions": {
+          "Upload_photo": {
+            "type": "ApiConnection",
+            "inputs": {
+              "host": { "connection": { "name": "@parameters('$connections')['azureblob']['connectionId']" } },
+              "method": "post",
+              "body": "@base64ToBinary(items('Process_new_photos')?['fileContent'])",
+              "headers": { "ReadFileMetadataFromServer": true },
+              "path": "/v2/datasets/@{encodeURIComponent(encodeURIComponent('flavorsharestorage123'))}/files",
+              "queries": {
+                "folderPath": "/media/photos",
+                "name": "@{concat('photo-', guid(), '-', items('Process_new_photos')?['fileName'])}",
+                "queryParametersSingleEncoded": true
+              }
+            },
+            "runtimeConfiguration": { "contentTransfer": { "transferMode": "Chunked" } }
+          },
+          "Append_photo": {
+            "runAfter": { "Upload_photo": ["Succeeded"] },
+            "type": "AppendToArrayVariable",
+            "inputs": {
+              "name": "photos",
+              "value": {
+                "id": "@{concat('photo-', guid())}",
+                "url": "@{concat('https://flavorsharestorage123.blob.core.windows.net', body('Upload_photo')?['Path'])}",
+                "title": "@{items('Process_new_photos')?['fileName']}"
+              }
+            }
+          }
+        },
+        "runtimeConfiguration": { "concurrency": { "repetitions": 1 } }
+      },
+      "Process_new_videos": {
+        "runAfter": { "Process_new_photos": ["Succeeded"] },
+        "type": "Foreach",
+        "foreach": "@coalesce(triggerBody()?['newMedia']?['videos'], json('[]'))",
+        "actions": {
+          "Upload_video": {
+            "type": "ApiConnection",
+            "inputs": {
+              "host": { "connection": { "name": "@parameters('$connections')['azureblob']['connectionId']" } },
+              "method": "post",
+              "body": "@base64ToBinary(items('Process_new_videos')?['fileContent'])",
+              "headers": { "ReadFileMetadataFromServer": true },
+              "path": "/v2/datasets/@{encodeURIComponent(encodeURIComponent('flavorsharestorage123'))}/files",
+              "queries": {
+                "folderPath": "/media/videos",
+                "name": "@{concat('video-', guid(), '-', items('Process_new_videos')?['fileName'])}",
+                "queryParametersSingleEncoded": true
+              }
+            },
+            "runtimeConfiguration": { "contentTransfer": { "transferMode": "Chunked" } }
+          },
+          "Append_video": {
+            "runAfter": { "Upload_video": ["Succeeded"] },
+            "type": "AppendToArrayVariable",
+            "inputs": {
+              "name": "videos",
+              "value": {
+                "id": "@{concat('video-', guid())}",
+                "url": "@{concat('https://flavorsharestorage123.blob.core.windows.net', body('Upload_video')?['Path'])}",
+                "title": "@{items('Process_new_videos')?['fileName']}"
+              }
+            }
+          }
+        },
+        "runtimeConfiguration": { "concurrency": { "repetitions": 1 } }
+      },
+      "Process_new_audio": {
+        "runAfter": { "Process_new_videos": ["Succeeded"] },
+        "type": "Foreach",
+        "foreach": "@coalesce(triggerBody()?['newMedia']?['audio'], json('[]'))",
+        "actions": {
+          "Upload_audio": {
+            "type": "ApiConnection",
+            "inputs": {
+              "host": { "connection": { "name": "@parameters('$connections')['azureblob']['connectionId']" } },
+              "method": "post",
+              "body": "@base64ToBinary(items('Process_new_audio')?['fileContent'])",
+              "headers": { "ReadFileMetadataFromServer": true },
+              "path": "/v2/datasets/@{encodeURIComponent(encodeURIComponent('flavorsharestorage123'))}/files",
+              "queries": {
+                "folderPath": "/media/audio",
+                "name": "@{concat('audio-', guid(), '-', items('Process_new_audio')?['fileName'])}",
+                "queryParametersSingleEncoded": true
+              }
+            },
+            "runtimeConfiguration": { "contentTransfer": { "transferMode": "Chunked" } }
+          },
+          "Append_audio": {
+            "runAfter": { "Upload_audio": ["Succeeded"] },
+            "type": "AppendToArrayVariable",
+            "inputs": {
+              "name": "audio",
+              "value": {
+                "id": "@{concat('audio-', guid())}",
+                "url": "@{concat('https://flavorsharestorage123.blob.core.windows.net', body('Upload_audio')?['Path'])}",
+                "title": "@{items('Process_new_audio')?['fileName']}"
+              }
+            }
+          }
+        },
+        "runtimeConfiguration": { "concurrency": { "repetitions": 1 } }
+      },
+      "Create_journal_document": {
+        "runAfter": { "Process_new_audio": ["Succeeded"] },
+        "type": "ApiConnection",
+        "inputs": {
+          "host": { "connection": { "name": "@parameters('$connections')['documentdb']['connectionId']" } },
+          "method": "post",
+          "body": {
+            "id": "@{variables('journalId')}",
+            "userId": "@{triggerBody()?['userId']}",
+            "title": "@{triggerBody()?['title']}",
+            "description": "@{coalesce(triggerBody()?['description'], '')}",
+            "coverImage": "@{variables('coverImageUrl')}",
+            "recipe": "@{coalesce(triggerBody()?['recipe'], json('{}'))}",
+            "media": {
+              "photos": "@variables('photos')",
+              "videos": "@variables('videos')",
+              "audio": "@variables('audio')"
+            },
+            "createdAt": "@{utcNow()}",
+            "updatedAt": "@{utcNow()}"
+          },
+          "headers": { "x-ms-documentdb-partitionkey": "@{triggerBody()?['userId']}" },
+          "path": "/v2/cosmosdb/@{encodeURIComponent('flavorsharedb')}/dbs/@{encodeURIComponent('FlavorShareDB')}/colls/@{encodeURIComponent('journals')}/docs"
+        }
+      },
+      "Response": {
+        "runAfter": { "Create_journal_document": ["Succeeded"] },
+        "type": "Response",
+        "kind": "Http",
+        "inputs": {
+          "statusCode": 201,
+          "headers": { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" },
+          "body": {
+            "success": true,
+            "message": "Journal created successfully",
+            "journal": {
+              "id": "@{variables('journalId')}",
+              "userId": "@{triggerBody()?['userId']}",
+              "title": "@{triggerBody()?['title']}",
+              "coverImage": "@{variables('coverImageUrl')}",
+              "createdAt": "@{utcNow()}"
+            }
+          }
+        }
+      }
+    },
+    "outputs": {},
+    "parameters": {
+      "$connections": { "type": "Object", "defaultValue": {} }
+    }
+  },
+  "parameters": {
+    "$connections": {
+      "type": "Object",
+      "value": {
+        "documentdb": {
+          "id": "/subscriptions/4746f881-91c0-4654-b2e8-c3d96a6476b6/providers/Microsoft.Web/locations/uksouth/managedApis/documentdb",
+          "connectionId": "/subscriptions/4746f881-91c0-4654-b2e8-c3d96a6476b6/resourceGroups/FlavorShare-RG/providers/Microsoft.Web/connections/documentdb-1",
+          "connectionName": "documentdb-1"
+        },
+        "azureblob": {
+          "id": "/subscriptions/4746f881-91c0-4654-b2e8-c3d96a6476b6/providers/Microsoft.Web/locations/uksouth/managedApis/azureblob",
+          "connectionId": "/subscriptions/4746f881-91c0-4654-b2e8-c3d96a6476b6/resourceGroups/FlavorShare-RG/providers/Microsoft.Web/connections/azureblob",
+          "connectionName": "azureblob"
+        }
+      }
+    }
+  }
+}
