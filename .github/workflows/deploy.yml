@@ -30,19 +30,13 @@ jobs:
       - name: Build project
         run: npm run build
 
-      # 登录 Azure
-      - name: Login to Azure
-        uses: azure/login@v1
-        with:
-          creds: ${{ secrets.AZURE_CREDENTIALS }}
-
       # 部署到 Azure Blob Storage 静态网站
       - name: Deploy to Azure Static Website
         uses: azure/CLI@v1
         with:
           inlineScript: |
             az storage blob upload-batch \
-              --account-name flavorsharestorage123 \
+              --connection-string "${{ secrets.AZURE_STORAGE_CONNECTION_STRING }}" \
               --destination '$web' \
               --source ./dist \
               --overwrite
